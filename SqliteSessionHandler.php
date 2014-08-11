@@ -50,9 +50,7 @@ class PdoSqliteSessionHandler implements \SessionHandlerInterface {
             throw new \InvalidArgumentException('Invalid session save path.');
         }
 
-        //$this->dsn = 'sqlite:'.$savePath.DIRECTORY_SEPARATOR.static::$dbFilename;
-        $this->dsn = 'sqlite:'.__DIR__.'/php_session.sqlite.db';
-
+        $this->dsn = 'sqlite:'.$savePath.DIRECTORY_SEPARATOR.static::$dbFilename;
         $this->pdo = new \PDO($this->dsn, NULL, NULL, static::$dbOptions);
         $this->table = '"'.strtolower($sessionName).'"';
 
