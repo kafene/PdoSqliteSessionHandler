@@ -50,7 +50,9 @@ class PdoSqliteSessionHandler implements \SessionHandlerInterface {
             throw new \InvalidArgumentException('Invalid session save path.');
         }
 
-        $this->dsn = 'sqlite:'.$savePath.DIRECTORY_SEPARATOR.static::$dbFilename;
+        //$this->dsn = 'sqlite:'.$savePath.DIRECTORY_SEPARATOR.static::$dbFilename;
+        $this->dsn = 'sqlite:'.__DIR__.'/php_session.sqlite.db';
+
         $this->pdo = new \PDO($this->dsn, NULL, NULL, static::$dbOptions);
         $this->table = '"'.strtolower($sessionName).'"';
 
@@ -95,7 +97,6 @@ class PdoSqliteSessionHandler implements \SessionHandlerInterface {
         return $rows ? base64_decode($rows[0][0]) : '';
     }
 
-
     /**
      * Writes the session data to the session storage.
      *
@@ -111,16 +112,12 @@ class PdoSqliteSessionHandler implements \SessionHandlerInterface {
      * @return boolean
      */
     public function write($id, $data) {
-        if ($this->pdo) {
-            $sql = "REPLACE INTO {$this->table} (id, data, time) VALUES (:id, :data, :time)";
-            $sth = $this->getDb()->prepare($sql);
-            $sth->bindParam(':id', $id, \PDO::PARAM_STR);
-            $sth->bindValue(':data', base64_encode($data), \PDO::PARAM_STR);
-            $sth->bindValue(':time', time(), \PDO::PARAM_INT);
-            return $sth->execute();
-        } else {
-            return false;
-        }
+        $sql = "REPLACE INTO {$this->table} (id, data, time) VALUES (:id, :data, :time)";
+        $sth = $this->getDb()->prepare($sql);
+        $sth->bindParam(':id', $id, \PDO::PARAM_STR);
+        $sth->bindValue(':data', base64_encode($data), \PDO::PARAM_STR);
+        $sth->bindValue(':time', time(), \PDO::PARAM_INT);
+        return $sth->execute();
     }
 
     /**
