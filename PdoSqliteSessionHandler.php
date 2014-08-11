@@ -2,29 +2,7 @@
 
 class PdoSqliteSessionHandler implements \SessionHandlerInterface {
     private $pdo, $dsn, $table;
-
     public static $dbFilename = 'php_session.sqlite.db';
-
-    public static $dbOptions = [
-        \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
-        \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_NUM,
-        \PDO::ATTR_PERSISTENT => true,
-        \PDO::ATTR_MAX_COLUMN_LEN => 32,
-        \PDO::ATTR_EMULATE_PREPARES => false,
-        \PDO::ATTR_CASE => \PDO::CASE_LOWER,
-        \PDO::ATTR_CURSOR => \PDO::CURSOR_FWDONLY,
-        # \PDO::ATTR_AUTOCOMMIT => false,
-    ];
-
-    public static $dbInitCommands = [
-        'PRAGMA encoding="UTF-8";',
-        'PRAGMA auto_vacuum=FULL;',
-        'PRAGMA locking_mode=EXCLUSIVE;',
-        'PRAGMA synchronous=FULL;',
-        'PRAGMA temp_store=MEMORY;',
-        'PRAGMA secure_delete=1;',
-        'PRAGMA writable_schema=0;',
-    ];
 
     /**
      * Re-initialize existing session, or creates a new one.
@@ -50,15 +28,27 @@ class PdoSqliteSessionHandler implements \SessionHandlerInterface {
             throw new \InvalidArgumentException('Invalid session save path.');
         }
 
-        //$this->dsn = 'sqlite:'.$savePath.DIRECTORY_SEPARATOR.static::$dbFilename;
-        $this->dsn = 'sqlite:'.__DIR__.'/php_session.sqlite.db';
+        $dbOptions = [
+            \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
+            \PDO::ATTR_PERSISTENT => true,
+            \PDO::ATTR_MAX_COLUMN_LEN => 32,
+            \PDO::ATTR_EMULATE_PREPARES => false,
+            \PDO::ATTR_CASE => \PDO::CASE_LOWER,
+            \PDO::ATTR_CURSOR => \PDO::CURSOR_FWDONLY,
+            # \PDO::ATTR_AUTOCOMMIT => false,
+        ];
 
-        $this->pdo = new \PDO($this->dsn, NULL, NULL, static::$dbOptions);
+        $this->dsn = 'sqlite:'.$savePath.DIRECTORY_SEPARATOR.static::$dbFilename;
+        $this->pdo = new \PDO($this->dsn, NULL, NULL, $dbOptions);
         $this->table = '"'.strtolower($sessionName).'"';
 
-        foreach (static::$dbInitCommands as $cmd) {
-            $this->pdo->exec(str_replace('{{TABLE}}', $this->table, $cmd));
-        }
+        $this->pdo->exec('PRAGMA encoding="UTF-8";');
+        $this->pdo->exec('PRAGMA auto_vacuum=FULL;');
+        $this->pdo->exec('PRAGMA locking_mode=EXCLUSIVE;');
+        $this->pdo->exec('PRAGMA synchronous=FULL;');
+        $this->pdo->exec('PRAGMA temp_store=MEMORY;');
+        $this->pdo->exec('PRAGMA secure_delete=1;');
+        $this->pdo->exec('PRAGMA writable_schema=0;');
 
         $this->pdo->exec(
             "CREATE TABLE IF NOT EXISTS {$this->table} (
@@ -166,23 +156,20 @@ class PdoSqliteSessionHandler implements \SessionHandlerInterface {
         return trim($this->table, '"');
     }
 
-    public static function register($dbFilename = '') {
+    public static function register($dbFilename = null) {
         $status = session_status();
 
         if (PHP_SESSION_ACTIVE === $status) {
             throw new \LogicException('A session is already open.');
-        }
-
-        if (PHP_SESSION_DISABLED === $status) {
+        } elseif (PHP_SESSION_DISABLED === $status) {
             throw new \LogicException('PHP sessions are disabled.');
         }
-
-        $handler = new static();
 
         if ($dbFilename) {
             static::$dbFileName = $dbFilename;
         }
 
+        $handler = new static();
         session_set_save_handler($handler, true);
 
         return $handler;
