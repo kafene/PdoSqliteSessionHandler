@@ -1,35 +1,30 @@
 <?php
 
-namespace kafene;
-use \PDO;
+class PdoSqliteSessionHandler implements \SessionHandlerInterface {
+    private $pdo, $dsn, $table;
 
-class SqliteSessionHandler implements \SessionHandlerInterface
-{
+    public static $dbFilename = 'php_session.sqlite.db';
 
-    /**
-     * @var PDO
-     */
-    protected $pdo;
+    public static $dbOptions = [
+        \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
+        \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_NUM,
+        \PDO::ATTR_PERSISTENT => true,
+        \PDO::ATTR_MAX_COLUMN_LEN => 32,
+        \PDO::ATTR_EMULATE_PREPARES => false,
+        \PDO::ATTR_CASE => \PDO::CASE_LOWER,
+        \PDO::ATTR_CURSOR => \PDO::CURSOR_FWDONLY,
+        # \PDO::ATTR_AUTOCOMMIT => false,
+    ];
 
-    /**
-     * @var string Database Table name.
-     */
-    protected $table;
-
-    /**
-     * @var string Session name.
-     */
-    protected $name;
-
-    /**
-     * Constructor
-     *
-     * @param string $dbFile PDO Database Filename
-     */
-    function __construct($dbFilename = "php_session.db")
-    {
-        $this->dbFilename = $dbFilename;
-    }
+    public static $dbInitCommands = [
+        'PRAGMA encoding="UTF-8";',
+        'PRAGMA auto_vacuum=FULL;',
+        'PRAGMA locking_mode=EXCLUSIVE;',
+        'PRAGMA synchronous=FULL;',
+        'PRAGMA temp_store=MEMORY;',
+        'PRAGMA secure_delete=1;',
+        'PRAGMA writable_schema=0;',
+    ];
 
     /**
      * Re-initialize existing session, or creates a new one.
@@ -38,75 +33,70 @@ class SqliteSessionHandler implements \SessionHandlerInterface
      * @param string $savePath The path where to store/retrieve the session.
      * @param string $name The session name.
      */
-    function open($save_path, $name)
-    {
-        $ds = DIRECTORY_SEPARATOR;
-        $defaultName = ini_get("session.name") ?: "PHPSESSID";
-        $name = $name ?: $defaultName;
-
-        if (0 === strlen($name)) {
-            throw new \Exception("Session name can not be 0-length.");
+    public function open($savePath, $sessionName) {
+        if (!is_null($this->pdo)) {
+            throw new \BadMethodCallException('Bad call to open(): connection already opened.');
         }
 
-        $save_path = rtrim(realpath($save_path), $ds);
-
-        if (!is_writable($save_path)) {
-            throw new \Exception("Session save path is not writable.");
+        if (!ctype_alnum($sessionName)) {
+            throw new \InvalidArgumentException('Invalid session name. Must be alphanumeric.');
         }
 
-        if (!is_dir($save_path)) {
-            throw new \Exception("Session save path is not a directory.");
+        if (false === realpath($savePath)) {
+            mkdir($savePath, 0700, true);
         }
 
-        $path = sprintf("sqlite:%s%s%s", $save_path, $ds, $this->dbFilename);
-        $opts = array(PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION);
+        if (!is_dir($savePath) || !is_writable($savePath)) {
+            throw new \InvalidArgumentException('Invalid session save path.');
+        }
 
-        $this->name = $name;
-        $this->pdo = new PDO($path, null, null, $opts);
-        $this->table = $this->pdo->quote($name) ?: $name;
+        //$this->dsn = 'sqlite:'.$savePath.DIRECTORY_SEPARATOR.static::$dbFilename;
+        $this->dsn = 'sqlite:'.__DIR__.'/php_session.sqlite.db';
 
-        $this->pdo->exec("
-            CREATE TABLE IF NOT EXISTS {$this->table} (
-                id TEXT PRIMARY KEY NOT NULL UNIQUE,
-                time INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-                data TEXT NOT NULL DEFAULT ''
-            );
-        ");
+        $this->pdo = new \PDO($this->dsn, NULL, NULL, static::$dbOptions);
+        $this->table = '"'.strtolower($sessionName).'"';
+
+        foreach (static::$dbInitCommands as $cmd) {
+            $this->pdo->exec(str_replace('{{TABLE}}', $this->table, $cmd));
+        }
+
+        $this->pdo->exec(
+            "CREATE TABLE IF NOT EXISTS {$this->table} (
+                id TEXT PRIMARY KEY NOT NULL,
+                data TEXT CHECK (TYPEOF(data) = 'text') NOT NULL DEFAULT '',
+                time INTEGER CHECK (TYPEOF(time) = 'integer') NOT NULL
+            ) WITHOUT ROWID;"
+        ); # time DEFAULT (strftime('%s', 'now'))
+
+        return true;
     }
 
     /**
      * Closes the current session.
      */
-    function close()
-    {
+    public function close() {
         $this->pdo = null;
-
         return true;
     }
 
     /**
      * Returns an encoded string of the read data.
      * If nothing was read, it must return an empty string.
+     * This value is returned internally to PHP for processing.
      *
-     * Note: this value is returned internally to PHP for processing.
-     *
-     * @param string $sessionId The session id.
+     * @param string $id The session id.
      *
      * @return string
      */
-    function read($id)
-    {
+    public function read($id) {
         $sql = "SELECT data FROM {$this->table} WHERE id = :id LIMIT 1";
-        $st = $this->pdo->prepare($sql);
-        $st->bindValue(":id", $id, PDO::PARAM_STR);
-        $data = "";
-
-        if ($st->execute() && ($r = $st->fetchAll(PDO::FETCH_NUM)) && isset($r[0], $r[0][0])) {
-            $data = base64_decode($r[0][0]);
-        }
-
-        return $data;
+        $sth = $this->getDb()->prepare($sql);
+        $sth->bindParam(':id', $id, \PDO::PARAM_STR);
+        $sth->execute();
+        $rows = $sth->fetchAll(\PDO::FETCH_NUM);
+        return $rows ? base64_decode($rows[0][0]) : '';
     }
+
 
     /**
      * Writes the session data to the session storage.
@@ -115,48 +105,24 @@ class SqliteSessionHandler implements \SessionHandlerInterface
      * when session_register_shutdown() fails,
      * or during a normal shutdown.
      *
-     * Note: $this->close() is called immediately after this function.
+     * close() is called immediately after this function.
      *
-     * PHP will call this method when the session is ready to be saved
-     * and closed. It encodes the session data from the $_SESSION superglobal
-     * to a serialized string and passes this along with the session ID to
-     * this method for storage. The serialization method used is specified in
-     * the session.serialize_handler setting.
-     *
-     * Note: this method is normally called by PHP after the output buffers
-     * have been closed unless explicitly called by session_write_close().
-     *
-     * @see http://stackoverflow.com/questions/418898/sqlite-upsert-not-insert-or-replace
-     *
-     * @param string $sessionId The session id.
-     * @param string $sessionData The encoded session data.
-     *     This data is the result of the PHP internally encoding the
-     *     $_SESSION superglobal to a serialized string and passing it
-     *     as this parameter. Please note sessions use an alternative
-     *     serialization method.
+     * @param string $id The session id.
+     * @param string $data The encoded session data.
      *
      * @return boolean
      */
-    function write($id, $data)
-    {
-        $time = time();
-        $data = base64_encode($data);
-
-        $sql = "INSERT OR IGNORE INTO {$this->table} (id, time, data) VALUES (:id, :time, :data)";
-        $st = $this->pdo->prepare($sql);
-        $st->bindValue(":id", $id, PDO::PARAM_STR);
-        $st->bindValue(":time", $time, PDO::PARAM_INT);
-        $st->bindValue(":data", $data, PDO::PARAM_STR);
-        $st->execute();
-
-        $sql = "UPDATE {$this->table} SET time = :time, data = :data WHERE id = :id";
-        $st = $this->pdo->prepare($sql);
-        $st->bindValue(":id", $id, PDO::PARAM_STR);
-        $st->bindValue(":time", $time, PDO::PARAM_INT);
-        $st->bindValue(":data", $data, PDO::PARAM_STR);
-        $st->execute();
-
-        return true;
+    public function write($id, $data) {
+        if ($this->pdo) {
+            $sql = "REPLACE INTO {$this->table} (id, data, time) VALUES (:id, :data, :time)";
+            $sth = $this->getDb()->prepare($sql);
+            $sth->bindParam(':id', $id, \PDO::PARAM_STR);
+            $sth->bindValue(':data', base64_encode($data), \PDO::PARAM_STR);
+            $sth->bindValue(':time', time(), \PDO::PARAM_INT);
+            return $sth->execute();
+        } else {
+            return false;
+        }
     }
 
     /**
@@ -169,28 +135,11 @@ class SqliteSessionHandler implements \SessionHandlerInterface
      *
      * @return boolean
      */
-    function destroy($id)
-    {
+    public function destroy($id) {
         $sql = "DELETE FROM {$this->table} WHERE id = :id";
-        $st = $this->pdo->prepare($sql);
-        $st->bindValue(":id", $id, PDO::PARAM_STR);
-        $st->execute();
-
-        $name = session_name();
-        if (isset($_COOKIE[$this->name]) && !headers_sent()) {
-            $_COOKIE[$this->name] = null;
-            $GLOBALS['_COOKIE'][$this->name] = null;
-            $params = session_get_cookie_params();
-
-            $path = isset($params["path"]) ? $params["path"] : null;
-            $domain = isset($params["domain"]) ? $params["domain"] : null;
-            $secure = isset($params["secure"]) ? $params["secure"] : null;
-            $httponly = isset($params["httponly"]) ? $params["httponly"] : null;
-
-            setcookie($this->name, "", 1, $path, $domain, $secure, $httponly);
-        }
-
-        return true;
+        $sth = $this->getDb()->prepare($sql);
+        $sth->bindParam(':id', $id, \PDO::PARAM_STR);
+        return $sth->execute();
     }
 
     /**
@@ -203,13 +152,45 @@ class SqliteSessionHandler implements \SessionHandlerInterface
      *
      * @return boolean
      */
-    function gc($lifetime)
-    {
+    public function gc($lifetime) {
         $sql = "DELETE FROM {$this->table} WHERE time < :time";
-        $st = $this->pdo->prepare($sql);
-        $st->bindValue(":time", time() - intval($lifetime), PDO::PARAM_INT);
-        $st->execute();
+        $sth = $this->getDb()->prepare($sql);
+        $sth->bindValue(':time', time() - $lifetime, \PDO::PARAM_INT);
+        return $sth->execute();
+    }
 
-        return true;
+    public function getDb() {
+        return $this->pdo;
+    }
+
+    public function getDsn() {
+        return $this->dsn;
+    }
+
+    public function getTable() {
+        return trim($this->table, '"');
+    }
+
+    public static function register($dbFilename = '') {
+        $status = session_status();
+
+        if (PHP_SESSION_ACTIVE === $status) {
+            throw new \LogicException('A session is already open.');
+        }
+
+        if (PHP_SESSION_DISABLED === $status) {
+            throw new \LogicException('PHP sessions are disabled.');
+        }
+
+        $handler = new static();
+
+        if ($dbFilename) {
+            static::$dbFileName = $dbFilename;
+        }
+
+        session_set_save_handler($handler);
+        session_register_shutdown();
+
+        return $handler;
     }
 }
