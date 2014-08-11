@@ -183,8 +183,7 @@ class PdoSqliteSessionHandler implements \SessionHandlerInterface {
             static::$dbFileName = $dbFilename;
         }
 
-        session_set_save_handler($handler);
-        session_register_shutdown();
+        session_set_save_handler($handler, true);
 
         return $handler;
     }
