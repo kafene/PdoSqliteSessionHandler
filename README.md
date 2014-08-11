@@ -1,14 +1,12 @@
-SqliteSessionHandler
+PdoSqliteSessionHandler
 ====================
 
 PHP Session Handler using a SQLite Database
 
 ```php
-require_once "SqliteSessionHandler.php";
+require_once "PdoSqliteSessionHandler.php";
 
-$handler = new kafene\SqliteSessionHandler("sessions.db");
-
-session_set_save_handler($handler, true);
+PdoSqliteSessionHandler::register();
 session_start();
 
 var_dump($_SESSION, session_save_path());
